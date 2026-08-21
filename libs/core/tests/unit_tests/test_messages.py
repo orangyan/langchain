@@ -1,5 +1,5 @@
 import uuid
-from typing import get_args
+from typing import Any, get_args
 
 import pytest
 
@@ -223,6 +223,14 @@ def test_message_chunks() -> None:
 
     # Provider assigned IDs have highest precedence
     assert (default_id_chunk + provider_chunk).id == meaningful_id
+
+
+def test_message_chunks_bool_additional_kwargs_raises() -> None:
+    """Differing booleans (e.g. `refusal`) must not silently coerce to `int`."""
+    a = AIMessageChunk(content="", additional_kwargs={"refusal": True})
+    b = AIMessageChunk(content="", additional_kwargs={"refusal": False})
+    with pytest.raises(TypeError, match="unsupported type"):
+        a + b
 
 
 def test_chat_message_chunks() -> None:
@@ -488,7 +496,7 @@ def test_message_chunk_to_message() -> None:
 
 
 def test_tool_calls_merge() -> None:
-    chunks: list[dict] = [
+    chunks: list[dict[str, Any]] = [
         {"content": ""},
         {
             "content": "",
@@ -1092,7 +1100,11 @@ def test_tool_message_str() -> None:
         ),
     ],
 )
-def test_merge_content(first: list | str, others: list, expected: list | str) -> None:
+def test_merge_content(
+    first: str | list[str | dict[str, Any]],
+    others: str | list[str | dict[str, Any]],
+    expected: str | list[str | dict[str, Any]],
+) -> None:
     actual = merge_content(first, *others)
     assert actual == expected
 

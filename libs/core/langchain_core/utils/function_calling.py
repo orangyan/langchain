@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import collections
+import copy
 import inspect
 import logging
 import types
@@ -28,7 +29,6 @@ from pydantic.v1 import Field as Field_v1
 from pydantic.v1 import create_model as create_model_v1
 from typing_extensions import TypedDict, is_typeddict
 
-import langchain_core
 from langchain_core._api import beta
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, ToolMessage
 from langchain_core.utils.json_schema import dereference_refs
@@ -57,10 +57,8 @@ _ORIGIN_MAP: dict[type, Any] = {
     collections.abc.Mapping: typing.Mapping,
     collections.abc.Sequence: typing.Sequence,
     collections.abc.MutableMapping: typing.MutableMapping,
+    types.UnionType: Union,
 }
-# Add UnionType mapping for Python 3.10+
-if hasattr(types, "UnionType"):
-    _ORIGIN_MAP[types.UnionType] = Union
 
 
 class FunctionDescription(TypedDict):
@@ -72,7 +70,7 @@ class FunctionDescription(TypedDict):
     description: str
     """A description of the function."""
 
-    parameters: dict
+    parameters: dict[str, Any]
     """The parameters of the function."""
 
 
@@ -86,7 +84,7 @@ class ToolDescription(TypedDict):
     """The function description."""
 
 
-def _rm_titles(kv: dict, prev_key: str = "") -> dict:
+def _rm_titles(kv: dict[str, Any], prev_key: str = "") -> dict[str, Any]:
     """Recursively removes `'title'` fields from a JSON schema dictionary.
 
     Remove `'title'` fields from the input JSON schema dictionary,
@@ -121,7 +119,7 @@ def _rm_titles(kv: dict, prev_key: str = "") -> dict:
 
 
 def _convert_json_schema_to_openai_function(
-    schema: dict,
+    schema: dict[str, Any],
     *,
     name: str | None = None,
     description: str | None = None,
@@ -206,13 +204,13 @@ def _convert_pydantic_to_openai_function(
     )
 
 
-def _get_python_function_name(function: Callable) -> str:
+def _get_python_function_name(function: Callable[..., Any]) -> str:
     """Get the name of a Python function."""
     return function.__name__
 
 
 def _convert_python_function_to_openai_function(
-    function: Callable,
+    function: Callable[..., Any],
 ) -> FunctionDescription:
     """Convert a Python function to an OpenAI function-calling API compatible dict.
 
@@ -226,8 +224,11 @@ def _convert_python_function_to_openai_function(
     Returns:
         The OpenAI function description.
     """
+    # Import locally to prevent circular import
+    from langchain_core.tools.base import create_schema_from_function  # noqa: PLC0415
+
     func_name = _get_python_function_name(function)
-    model = langchain_core.tools.base.create_schema_from_function(
+    model = create_schema_from_function(
         func_name,
         function,
         filter_args=(),
@@ -243,7 +244,7 @@ def _convert_python_function_to_openai_function(
 
 
 def _convert_typed_dict_to_openai_function(typed_dict: type) -> FunctionDescription:
-    visited: dict = {}
+    visited: dict[type, type] = {}
 
     model = cast(
         "type[BaseModel]",
@@ -279,7 +280,7 @@ def _convert_any_typed_dicts_to_pydantic(
         description, arg_descriptions = _parse_google_docstring(
             docstring, list(annotations_)
         )
-        fields: dict = {}
+        fields: dict[str, Any] = {}
         for arg, arg_type in annotations_.items():
             if get_origin(arg_type) in {Annotated, typing_extensions.Annotated}:
                 annotated_args = get_args(arg_type)
@@ -337,9 +338,10 @@ def _format_tool_to_openai_function(tool: BaseTool) -> FunctionDescription:
     Returns:
         The function description.
     """
-    is_simple_oai_tool = (
-        isinstance(tool, langchain_core.tools.simple.Tool) and not tool.args_schema
-    )
+    # Import locally to prevent circular import
+    from langchain_core.tools import Tool  # noqa: PLC0415
+
+    is_simple_oai_tool = isinstance(tool, Tool) and not tool.args_schema
     if tool.tool_call_schema and not is_simple_oai_tool:
         if isinstance(tool.tool_call_schema, dict):
             return _convert_json_schema_to_openai_function(
@@ -349,7 +351,7 @@ def _format_tool_to_openai_function(tool: BaseTool) -> FunctionDescription:
             return _convert_pydantic_to_openai_function(
                 tool.tool_call_schema, name=tool.name, description=tool.description
             )
-        error_msg = (
+        error_msg = (  # type: ignore[unreachable]
             f"Unsupported tool call schema: {tool.tool_call_schema}. "
             "Tool call schema must be a JSON schema dict or a Pydantic model."
         )
@@ -373,7 +375,7 @@ def _format_tool_to_openai_function(tool: BaseTool) -> FunctionDescription:
 
 
 def convert_to_openai_function(
-    function: Mapping[str, Any] | type | Callable | BaseTool,
+    function: Mapping[str, Any] | type | Callable[..., Any] | BaseTool,
     *,
     strict: bool | None = None,
 ) -> dict[str, Any]:
@@ -403,6 +405,12 @@ def convert_to_openai_function(
         `description` and `parameters` keys are now optional. Only `name` is
         required and guaranteed to be part of the output.
     """
+    # Import locally to prevent circular import
+    from langchain_core.tools import BaseTool  # noqa: PLC0415
+
+    if strict and isinstance(function, dict):
+        function = copy.deepcopy(function)
+
     # an Anthropic format tool
     if isinstance(function, dict) and all(
         k in function for k in ("name", "input_schema")
@@ -437,16 +445,19 @@ def convert_to_openai_function(
         if function_copy and "properties" in function_copy:
             oai_function["parameters"] = function_copy
     elif isinstance(function, type) and is_basemodel_subclass(function):
-        oai_function = cast("dict", _convert_pydantic_to_openai_function(function))
+        oai_function = cast(
+            "dict[str, Any]", _convert_pydantic_to_openai_function(function)
+        )
     elif is_typeddict(function):
         oai_function = cast(
-            "dict", _convert_typed_dict_to_openai_function(cast("type", function))
+            "dict[str, Any]",
+            _convert_typed_dict_to_openai_function(cast("type", function)),
         )
-    elif isinstance(function, langchain_core.tools.base.BaseTool):
-        oai_function = cast("dict", _format_tool_to_openai_function(function))
+    elif isinstance(function, BaseTool):
+        oai_function = cast("dict[str, Any]", _format_tool_to_openai_function(function))
     elif callable(function):
         oai_function = cast(
-            "dict", _convert_python_function_to_openai_function(function)
+            "dict[str, Any]", _convert_python_function_to_openai_function(function)
         )
     else:
         if isinstance(function, dict) and (
@@ -476,18 +487,6 @@ def convert_to_openai_function(
             raise ValueError(msg)
         oai_function["strict"] = strict
         if strict:
-            # All fields must be `required`
-            parameters = oai_function.get("parameters")
-            if isinstance(parameters, dict):
-                fields = parameters.get("properties")
-                if isinstance(fields, dict) and fields:
-                    parameters = dict(parameters)
-                    parameters["required"] = list(fields.keys())
-                    oai_function["parameters"] = parameters
-
-            # As of 08/06/24, OpenAI requires that additionalProperties be supplied and
-            # set to False if strict is True.
-            # All properties layer needs 'additionalProperties=False'
             oai_function["parameters"] = _recursive_set_additional_properties_false(
                 oai_function["parameters"]
             )
@@ -508,12 +507,13 @@ _WellKnownOpenAITools = (
     "web_search_preview",
     "web_search",
     "tool_search",
+    "apply_patch",
     "namespace",
 )
 
 
 def convert_to_openai_tool(
-    tool: Mapping[str, Any] | type[BaseModel] | Callable | BaseTool,
+    tool: Mapping[str, Any] | type[BaseModel] | Callable[..., Any] | BaseTool,
     *,
     strict: bool | None = None,
 ) -> dict[str, Any]:
@@ -546,7 +546,7 @@ def convert_to_openai_tool(
 
         Return OpenAI Responses API-style tools unchanged. This includes
         any dict with `"type"` in `"file_search"`, `"function"`,
-        `"computer_use_preview"`, `"web_search_preview"`.
+        `"computer_use_preview"`, `"web_search_preview"`, `"apply_patch"`.
 
     !!! warning "Behavior changed in `langchain-core` 0.3.63"
 
@@ -575,7 +575,7 @@ def convert_to_openai_tool(
 
 
 def convert_to_json_schema(
-    schema: dict[str, Any] | type[BaseModel] | Callable | BaseTool,
+    schema: dict[str, Any] | type[BaseModel] | Callable[..., Any] | BaseTool,
     *,
     strict: bool | None = None,
 ) -> dict[str, Any]:
@@ -711,6 +711,13 @@ def tool_example_to_messages(
     messages.append(
         AIMessage(content="", additional_kwargs={"tool_calls": openai_tool_calls})
     )
+    if tool_outputs is not None and len(tool_outputs) != len(openai_tool_calls):
+        msg = (
+            f"The number of tool_outputs ({len(tool_outputs)}) must match the number "
+            f"of tool_calls ({len(openai_tool_calls)}). Got {len(tool_outputs)} "
+            f"output(s) for {len(openai_tool_calls)} tool call(s)."
+        )
+        raise ValueError(msg)
     tool_outputs = tool_outputs or ["You have correctly called this tool."] * len(
         openai_tool_calls
     )
@@ -730,7 +737,7 @@ def _parse_google_docstring(
     args: list[str],
     *,
     error_on_invalid_docstring: bool = False,
-) -> tuple[str, dict]:
+) -> tuple[str, dict[str, str]]:
     """Parse the function and argument descriptions from the docstring of a function.
 
     Assumes the function docstring follows Google Python style guide.
@@ -779,11 +786,27 @@ def _parse_google_docstring(
             raise ValueError(msg)
         description = ""
         args_block = None
-    arg_descriptions = {}
+    arg_descriptions: dict[str, str] = {}
     if args_block:
-        arg = None
+        arg: str | None = None
+        # Base indentation, latched once from the first argument line, lets us
+        # distinguish new argument definitions from continuation lines. This
+        # assumes Google-style uniform indentation of argument names: a line
+        # indented deeper than the first argument is treated as a continuation
+        # (even if it contains a colon), so a more-indented later `name:` line
+        # in a malformed, non-uniformly-indented block folds into the previous
+        # argument rather than starting a new one.
+        arg_indent: int | None = None
         for line in args_block.split("\n")[1:]:
-            if ":" in line:
+            if not line.strip():
+                continue
+            current_indent = len(line) - len(line.lstrip())
+            if arg_indent is None and ":" in line:
+                arg_indent = current_indent
+            is_continuation = arg_indent is not None and current_indent > arg_indent
+            if arg is not None and is_continuation:
+                arg_descriptions[arg] += " " + line.strip()
+            elif ":" in line:
                 arg, desc = line.split(":", maxsplit=1)
                 arg = arg.strip()
                 arg_name, _, annotations_ = arg.partition(" ")
@@ -803,6 +826,12 @@ def _recursive_set_additional_properties_false(
     schema: dict[str, Any],
 ) -> dict[str, Any]:
     if isinstance(schema, dict):
+        # OpenAI strict mode requires every property to appear in `required` at every
+        # level of nesting. Without this, nested object schemas are rejected.
+        properties = schema.get("properties")
+        if isinstance(properties, dict) and properties:
+            schema["required"] = list(properties.keys())
+
         # Check if 'required' is a key at the current level or if the schema is empty,
         # in which case additionalProperties still needs to be specified.
         if (
@@ -820,10 +849,21 @@ def _recursive_set_additional_properties_false(
         if "anyOf" in schema:
             for sub_schema in schema["anyOf"]:
                 _recursive_set_additional_properties_false(sub_schema)
+        # Pydantic <2.9 wraps a referenced model field in 'allOf' when it has
+        # sibling keys (e.g. 'description'), instead of merging them directly.
+        if "allOf" in schema:
+            for sub_schema in schema["allOf"]:
+                _recursive_set_additional_properties_false(sub_schema)
         if "properties" in schema:
             for sub_schema in schema["properties"].values():
                 _recursive_set_additional_properties_false(sub_schema)
         if "items" in schema:
             _recursive_set_additional_properties_false(schema["items"])
+        # Raw JSON schemas may keep nested objects in `$defs` and reference them via
+        # `$ref`; walk those definitions too so they're made strict.
+        for defs_key in ("$defs", "definitions"):
+            if isinstance(schema.get(defs_key), dict):
+                for sub_schema in schema[defs_key].values():
+                    _recursive_set_additional_properties_false(sub_schema)
 
     return schema

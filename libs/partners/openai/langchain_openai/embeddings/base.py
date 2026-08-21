@@ -212,7 +212,11 @@ class OpenAIEmbeddings(BaseModel, Embeddings):
     """Base URL path for API requests, leave blank if not using a proxy or
     service emulator.
 
-    Automatically inferred from env var `OPENAI_API_BASE` if not provided.
+    Resolution order (first match wins):
+
+    1. Explicit `base_url` (or `openai_api_base`) kwarg.
+    2. Env var `OPENAI_API_BASE` (read by LangChain at init).
+    3. Env var `OPENAI_BASE_URL` (read by the underlying `openai` SDK client).
     """
 
     # to support Azure OpenAI Service custom endpoints
@@ -417,11 +421,12 @@ class OpenAIEmbeddings(BaseModel, Embeddings):
             else:
                 if self.openai_proxy and not self.http_client:
                     try:
-                        import httpx
+                        from langchain_openai._compat import httpx
                     except ImportError as e:
                         msg = (
-                            "Could not import httpx python package. "
-                            "Please install it with `pip install httpx`."
+                            "Could not import the httpx package used by the "
+                            "OpenAI SDK. It is normally installed alongside "
+                            "`openai`; reinstall with `pip install openai`."
                         )
                         raise ImportError(msg) from e
                     self.http_client = httpx.Client(proxy=self.openai_proxy)
@@ -433,11 +438,12 @@ class OpenAIEmbeddings(BaseModel, Embeddings):
         if not self.async_client:
             if self.openai_proxy and not self.http_async_client:
                 try:
-                    import httpx
+                    from langchain_openai._compat import httpx
                 except ImportError as e:
                     msg = (
-                        "Could not import httpx python package. "
-                        "Please install it with `pip install httpx`."
+                        "Could not import the httpx package used by the "
+                        "OpenAI SDK. It is normally installed alongside "
+                        "`openai`; reinstall with `pip install openai`."
                     )
                     raise ImportError(msg) from e
                 self.http_async_client = httpx.AsyncClient(proxy=self.openai_proxy)

@@ -6,7 +6,7 @@ focusing on the handler pattern (not generators).
 
 import time
 from collections.abc import Callable
-from typing import Any
+from typing import Any, TypedDict
 
 from langchain_core.messages import HumanMessage, ToolCall, ToolMessage
 from langchain_core.tools import BaseTool, tool
@@ -14,7 +14,7 @@ from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.types import Command
 
 from langchain.agents.factory import create_agent
-from langchain.agents.middleware.types import ToolCallRequest, wrap_tool_call
+from langchain.agents.middleware.types import AgentMiddleware, ToolCallRequest, wrap_tool_call
 from tests.unit_tests.agents.model import FakeToolCallingModel
 
 
@@ -72,6 +72,27 @@ def test_wrap_tool_call_basic_passthrough() -> None:
     tool_messages = [m for m in result["messages"] if isinstance(m, ToolMessage)]
     assert len(tool_messages) == 1
     assert "Results for: test" in tool_messages[0].content
+
+
+def test_wrap_tool_call_with_custom_state_schema() -> None:
+    """Test `state_schema` is accepted for consistency with other middleware decorators.
+
+    `before_model`, `after_model`, `wrap_model_call`, `before_agent`, and
+    `after_agent` all support a `state_schema` parameter.
+    """
+
+    class CustomState(TypedDict):
+        messages: list[Any]
+        custom_field: str
+
+    @wrap_tool_call(state_schema=CustomState)  # type: ignore[type-var]
+    def middleware_with_schema(
+        request: ToolCallRequest, handler: Callable[[ToolCallRequest], ToolMessage | Command[Any]]
+    ) -> ToolMessage | Command[Any]:
+        return handler(request)
+
+    assert isinstance(middleware_with_schema, AgentMiddleware)
+    assert middleware_with_schema.state_schema == CustomState
 
 
 def test_wrap_tool_call_logging() -> None:
@@ -291,7 +312,7 @@ def test_wrap_tool_call_short_circuit() -> None:
 
     @wrap_tool_call
     def short_circuit(
-        request: ToolCallRequest, handler: Callable[[ToolCallRequest], ToolMessage | Command[Any]]
+        request: ToolCallRequest, *_args: Any, **_kwargs: Any
     ) -> ToolMessage | Command[Any]:
         # Don't call handler, return custom response directly
         handler_called.append(False)
@@ -638,7 +659,7 @@ def test_wrap_tool_call_inner_short_circuits() -> None:
 
     @wrap_tool_call(name="InnerShortCircuit")
     def inner_short_circuit(
-        request: ToolCallRequest, handler: Callable[[ToolCallRequest], ToolMessage | Command[Any]]
+        request: ToolCallRequest, *_args: Any, **_kwargs: Any
     ) -> ToolMessage | Command[Any]:
         call_log.append("inner_short_circuit")
         # Don't call handler, return custom response

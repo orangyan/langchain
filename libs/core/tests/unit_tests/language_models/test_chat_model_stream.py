@@ -6,17 +6,19 @@ import asyncio
 from typing import TYPE_CHECKING, Any, cast
 
 import pytest
+from typing_extensions import assert_type
 
 from langchain_core.language_models.chat_model_stream import (
     AsyncChatModelStream,
     AsyncProjection,
+    AsyncTextProjection,
     ChatModelStream,
     SyncProjection,
     SyncTextProjection,
 )
 
 if TYPE_CHECKING:
-    from langchain_protocol.protocol import ContentBlockFinishData, MessagesData
+    from langchain_protocol.protocol import ContentBlockFinishData
 
 # ---------------------------------------------------------------------------
 # Projection unit tests
@@ -92,6 +94,24 @@ class TestSyncTextProjection:
         proj.push(" world")
         proj.complete("Hello world")
         assert str(proj) == "Hello world"
+
+    def test_get_before_completion_is_empty(self) -> None:
+        assert SyncTextProjection().get() == ""
+
+    def test_non_string_values_are_rejected_by_producers(self) -> None:
+        delta_proj = SyncTextProjection()
+        with pytest.raises(TypeError, match="requires a string delta"):
+            delta_proj.push(cast("str", 1))
+
+        final_proj = SyncTextProjection()
+        with pytest.raises(TypeError, match="requires a string final value"):
+            final_proj.complete(cast("str", 1))
+
+    def test_static_types(self) -> None:
+        stream = ChatModelStream()
+        for delta in stream.text:
+            assert_type(delta, str)
+        assert_type(stream.text.get(), str)
 
     def test_str_with_pump(self) -> None:
         proj = SyncTextProjection()
@@ -244,7 +264,7 @@ class TestAsyncProjection:
         """Concurrent `stream.text` + `await stream.output` both drive the pump."""
         stream = AsyncChatModelStream(message_id="m1")
 
-        events: list[MessagesData] = [
+        events: list[dict[str, Any]] = [
             {
                 "event": "message-start",
                 "role": "ai",
@@ -291,6 +311,37 @@ class TestAsyncProjection:
         assert message.content == [{"type": "text", "text": "hello world", "index": 0}]
 
 
+class TestAsyncTextProjection:
+    """Test AsyncTextProjection string consumers."""
+
+    @pytest.mark.asyncio
+    async def test_async_iter_and_await(self) -> None:
+        proj = AsyncTextProjection()
+        proj.push("Hello")
+        proj.push(" world")
+        proj.complete("Hello world")
+        assert [delta async for delta in proj] == ["Hello", " world"]
+        assert await proj == "Hello world"
+
+    @pytest.mark.asyncio
+    async def test_non_string_values_are_rejected_by_producers(self) -> None:
+        delta_proj = AsyncTextProjection()
+        with pytest.raises(TypeError, match="requires a string delta"):
+            delta_proj.push(cast("str", 1))
+
+        final_proj = AsyncTextProjection()
+        with pytest.raises(TypeError, match="requires a string final value"):
+            final_proj.complete(cast("str", 1))
+
+    @pytest.mark.asyncio
+    async def test_static_types(self) -> None:
+        stream = AsyncChatModelStream()
+        stream.dispatch({"event": "message-finish"})
+        async for delta in stream.text:
+            assert_type(delta, str)
+        assert_type(await stream.text, str)
+
+
 # ---------------------------------------------------------------------------
 # ChatModelStream unit tests
 # ---------------------------------------------------------------------------
@@ -313,7 +364,7 @@ class TestChatModelStream:
 
     def test_text_deltas_via_pump(self) -> None:
         stream = ChatModelStream()
-        events: list[MessagesData] = [
+        events: list[dict[str, Any]] = [
             {"event": "message-start", "role": "ai"},
             {
                 "event": "content-block-delta",
@@ -363,7 +414,7 @@ class TestChatModelStream:
             }
         )
         stream.dispatch(
-            {  # type: ignore[arg-type,misc]
+            {
                 "event": "content-block-delta",
                 "index": 0,
                 "content_block": {

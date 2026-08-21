@@ -10,7 +10,7 @@ Looking for the JS/TS version? Check out [LangChain.js](https://github.com/langc
 ## Quick Install
 
 ```bash
-pip install langchain-tests
+uv add langchain-tests
 ```
 
 ## 🤔 What is this?
@@ -89,5 +89,5 @@ as required is optional.
 
 - `chat_model_class` (required): The class of the chat model to be tested
 - `chat_model_params`: The keyword arguments to pass to the chat model constructor
-- `chat_model_has_tool_calling`: Whether the chat model can call tools. By default, this is set to `hasattr(chat_model_class, 'bind_tools)`
-- `chat_model_has_structured_output`: Whether the chat model can structured output. By default, this is set to `hasattr(chat_model_class, 'with_structured_output')`
+- `chat_model_has_tool_calling`: Whether the chat model can call tools. By default, this is set to `hasattr(chat_model_class, 'bind_tools')`
+- `chat_model_has_structured_output`: Whether the chat model can produce structured output. By default, this is set to `hasattr(chat_model_class, 'with_structured_output')`
